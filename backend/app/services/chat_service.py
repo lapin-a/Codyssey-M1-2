@@ -2,7 +2,7 @@
 필요하면 GPT가 내부 기능을 도구(Function Calling)로 호출하게 한다."""
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from openai import OpenAI, OpenAIError
 
@@ -12,12 +12,15 @@ from . import conversation_service, data_service
 
 logger = logging.getLogger(__name__)
 
+KST = timezone(timedelta(hours=9))
 MAX_HISTORY = 10  # 이전 대화 중 프롬프트에 넣을 최대 메시지 수
 MAX_TOOL_ROUNDS = 3  # 도구 호출 반복 상한(비용/무한루프 방지)
 
 SYSTEM_TEMPLATE = """당신은 원화 기준 환율 데이터(미국 달러, 유로, 일본 엔, 중국 위안, 영국 파운드)를 분석해 주는 한국어 어시스턴트입니다.
 아래는 데이터베이스에 저장된 통화별 일별 환율의 최신 요약입니다. 답변은 반드시 이 수치에 근거하세요.
 엔화(JPY)는 100엔당 원화 금액입니다.
+오늘 날짜: {today} (한국 시간). "최근", "지난주", "올해" 같은 표현은 이 날짜를 기준으로 해석하세요.
+환율 데이터는 영업일에만 있으므로 오늘이나 주말 값은 없을 수 있습니다.
 
 [데이터 요약]
 {summary}
@@ -133,7 +136,9 @@ def chat(message: str, conversation_id: str | None) -> dict:
 
     # 1) 데이터 요약 조회  2) 시스템 프롬프트에 주입
     summaries = data_service.get_all_summaries()
+    today = datetime.now(KST)
     system_prompt = SYSTEM_TEMPLATE.format(
+        today=f"{today:%Y-%m-%d} ({'월화수목금토일'[today.weekday()]}요일)",
         summary="\n\n".join(data_service.summary_to_text(s) for s in summaries)
     )
     messages = [{"role": "system", "content": system_prompt}]
