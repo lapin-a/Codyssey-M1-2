@@ -1,7 +1,14 @@
-"""시계열 데이터 CRUD와 분석(요약/통계)."""
-import statistics as st
-from datetime import datetime, timezone
+"""시계열 데이터 CRUD와 분석(요약/통계).
 
+데이터가 1만 건 이상이라 요청마다 Firestore 전체를 읽으면 무료 한도(일 5만 회 읽기)를 금방 넘는다.
+그래서 처음 한 번만 전체를 읽어 메모리에 캐시하고, 추가/수정/삭제 시 캐시도 함께 갱신한다.
+(Render 무료 플랜은 인스턴스 1개라 캐시 불일치 문제가 없다.)
+"""
+import statistics as st
+import threading
+from datetime import date, datetime, timedelta, timezone
+
+from ..currencies import CURRENCIES
 from ..db import DATA_COLLECTION, repo
 from ..schemas import DataCreate, DataUpdate
 
@@ -13,20 +20,46 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def list_data(start: str | None = None, end: str | None = None) -> list[dict]:
-    items = repo.list(DATA_COLLECTION)
+_cache: dict[str, dict] | None = None
+_cache_lock = threading.Lock()
+
+
+def _all() -> dict[str, dict]:
+    global _cache
+    with _cache_lock:
+        if _cache is None:
+            docs = repo.list(DATA_COLLECTION)
+            for d in docs:
+                d.setdefault("currency", "USD")  # currency 필드 도입 이전 문서 호환
+            _cache = {d["id"]: d for d in docs}
+        return _cache
+
+
+def reset_cache() -> None:
+    global _cache
+    with _cache_lock:
+        _cache = None
+
+
+def list_data(currency: str | None = None, start: str | None = None, end: str | None = None) -> list[dict]:
+    items = list(_all().values())
+    if currency:
+        items = [i for i in items if i["currency"] == currency]
     if start:
         items = [i for i in items if i["date"] >= start]
     if end:
         items = [i for i in items if i["date"] <= end]
-    return sorted(items, key=lambda i: i["date"])
+    return sorted(items, key=lambda i: (i["date"], i["currency"]))
 
 
 def create_data(payload: DataCreate) -> dict:
     now = _now()
-    doc = {"date": payload.date.isoformat(), "value": payload.value, "memo": payload.memo,
+    doc = {"date": payload.date.isoformat(), "currency": payload.currency, "value": payload.value,
+           "memo": payload.memo,
            "created_at": now, "updated_at": now}
-    return repo.add(DATA_COLLECTION, doc)
+    saved = repo.add(DATA_COLLECTION, doc)
+    _all()[saved["id"]] = saved
+    return saved
 
 
 def update_data(doc_id: str, payload: DataUpdate) -> dict | None:
@@ -36,11 +69,18 @@ def update_data(doc_id: str, payload: DataUpdate) -> dict | None:
     if "memo" in changes:
         changes["memo"] = changes["memo"].strip()
     changes["updated_at"] = _now()
-    return repo.update(DATA_COLLECTION, doc_id, changes)
+    updated = repo.update(DATA_COLLECTION, doc_id, changes)
+    if updated is not None:
+        updated.setdefault("currency", "USD")
+        _all()[doc_id] = updated
+    return updated
 
 
 def delete_data(doc_id: str) -> bool:
-    return repo.delete(DATA_COLLECTION, doc_id)
+    deleted = repo.delete(DATA_COLLECTION, doc_id)
+    if deleted:
+        _all().pop(doc_id, None)
+    return deleted
 
 
 def _trend(values: list[float]) -> tuple[str, str]:
@@ -65,15 +105,31 @@ def _trend(values: list[float]) -> tuple[str, str]:
     return label, f"최근 {n}개 데이터의 회귀 기울기 기준 약 {change_pct:+.2f}% 변화"
 
 
-def get_summary(start: str | None = None, end: str | None = None) -> dict:
-    items = list_data(start, end)
+def _change_since(items: list[dict], days: int) -> float | None:
+    """마지막 날짜 기준 N일 전(또는 그 직후 첫 데이터) 대비 변화율(%)."""
+    cutoff = (date.fromisoformat(items[-1]["date"]) - timedelta(days=days)).isoformat()
+    if items[0]["date"] > cutoff:
+        return None
+    base = next(i for i in items if i["date"] >= cutoff)["value"]
+    return round((items[-1]["value"] - base) / base * 100, 2)
+
+
+def _currency_info(currency: str) -> dict:
+    meta = CURRENCIES[currency]
+    return {"currency": currency, "currency_name": meta["name"], "unit": meta["unit"]}
+
+
+def get_summary(currency: str = "USD", start: str | None = None, end: str | None = None) -> dict:
+    items = list_data(currency, start, end)
     if not items:
-        return {"count": 0, "trend": "데이터 부족", "trend_detail": "저장된 데이터가 없습니다."}
+        return {**_currency_info(currency), "count": 0, "trend": "데이터 부족",
+                "trend_detail": "저장된 데이터가 없습니다."}
     values = [i["value"] for i in items]
     max_item = max(items, key=lambda i: i["value"])
     min_item = min(items, key=lambda i: i["value"])
     trend, detail = _trend(values)
     return {
+        **_currency_info(currency),
         "count": len(items),
         "period_start": items[0]["date"],
         "period_end": items[-1]["date"],
@@ -85,15 +141,21 @@ def get_summary(start: str | None = None, end: str | None = None) -> dict:
         "first_value": values[0],
         "latest_value": values[-1],
         "change_pct": round((values[-1] - values[0]) / values[0] * 100, 2),
+        "change_1y_pct": _change_since(items, days=365),
         "trend": trend,
         "trend_detail": detail,
     }
 
 
-def get_statistics(start: str | None = None, end: str | None = None) -> dict:
-    items = list_data(start, end)
+def get_all_summaries() -> list[dict]:
+    """모든 통화의 요약(캐시에서 계산)."""
+    return [get_summary(c) for c in CURRENCIES]
+
+
+def get_statistics(currency: str = "USD", start: str | None = None, end: str | None = None) -> dict:
+    items = list_data(currency, start, end)
     values = [i["value"] for i in items]
-    result: dict = {"count": len(values)}
+    result: dict = {"currency": currency, "count": len(values)}
     if len(values) < 2:
         return result
 
@@ -103,9 +165,14 @@ def get_statistics(start: str | None = None, end: str | None = None) -> dict:
         peak = max(peak, v)
         mdd = min(mdd, (v - peak) / peak * 100)
 
-    months: dict[str, list[float]] = {}
-    for i in items:
-        months.setdefault(i["date"][:7], []).append(i["value"])
+    def group(key_len: int) -> list[dict]:
+        groups: dict[str, list[float]] = {}
+        for i in items:
+            groups.setdefault(i["date"][:key_len], []).append(i["value"])
+        return [
+            {"period": k, "mean": round(st.fmean(v), 2), "max": max(v), "min": min(v), "count": len(v)}
+            for k, v in sorted(groups.items())
+        ]
 
     result.update(
         std=round(st.stdev(values), 2),
@@ -114,23 +181,25 @@ def get_statistics(start: str | None = None, end: str | None = None) -> dict:
         max_drawdown_pct=round(mdd, 2),
         ma7=round(st.fmean(values[-7:]), 2),
         ma30=round(st.fmean(values[-30:]), 2),
-        monthly=[
-            {"month": m, "mean": round(st.fmean(v), 2), "max": max(v), "min": min(v), "count": len(v)}
-            for m, v in sorted(months.items())
-        ],
+        yearly=group(4),
+        monthly=group(7),
     )
     return result
 
 
 def summary_to_text(s: dict) -> str:
     """요약 dict를 시스템 프롬프트에 넣을 문장으로 바꾼다."""
+    head = f"[{s['currency']} {s['currency_name']} · {s['unit']}당 원화]"
     if s["count"] == 0:
-        return "현재 저장된 데이터가 없습니다."
-    return (
-        f"- 데이터: 원/달러(USD/KRW) 일별 환율\n"
-        f"- 기간: {s['period_start']} ~ {s['period_end']} (총 {s['count']}개)\n"
-        f"- 평균: {s['mean']}원\n"
-        f"- 최고: {s['max']}원 ({s['max_date']}), 최저: {s['min']}원 ({s['min_date']})\n"
-        f"- 시작값 {s['first_value']}원 → 최신값 {s['latest_value']}원 (기간 변화율 {s['change_pct']:+}%)\n"
-        f"- 최근 추세: {s['trend']} ({s['trend_detail']})"
-    )
+        return f"{head}\n- 저장된 데이터가 없습니다."
+    lines = [
+        head,
+        f"- 기간: {s['period_start']} ~ {s['period_end']} (총 {s['count']}개)",
+        f"- 평균: {s['mean']}원",
+        f"- 최고: {s['max']}원 ({s['max_date']}), 최저: {s['min']}원 ({s['min_date']})",
+        f"- 시작값 {s['first_value']}원 → 최신값 {s['latest_value']}원 (기간 변화율 {s['change_pct']:+}%)",
+    ]
+    if s.get("change_1y_pct") is not None:
+        lines.append(f"- 최근 1년 변화율: {s['change_1y_pct']:+}%")
+    lines.append(f"- 최근 추세: {s['trend']} ({s['trend_detail']})")
+    return "\n".join(lines)

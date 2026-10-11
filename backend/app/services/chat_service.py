@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from openai import OpenAI, OpenAIError
 
 from .. import config
+from ..currencies import CURRENCIES
 from . import conversation_service, data_service
 
 logger = logging.getLogger(__name__)
@@ -14,19 +15,26 @@ logger = logging.getLogger(__name__)
 MAX_HISTORY = 10  # 이전 대화 중 프롬프트에 넣을 최대 메시지 수
 MAX_TOOL_ROUNDS = 3  # 도구 호출 반복 상한(비용/무한루프 방지)
 
-SYSTEM_TEMPLATE = """당신은 원/달러 환율 데이터를 분석해 주는 한국어 어시스턴트입니다.
-아래는 데이터베이스에 저장된 데이터의 최신 요약입니다. 답변은 반드시 이 수치에 근거하세요.
+SYSTEM_TEMPLATE = """당신은 원화 기준 환율 데이터(미국 달러, 유로, 일본 엔, 중국 위안, 영국 파운드)를 분석해 주는 한국어 어시스턴트입니다.
+아래는 데이터베이스에 저장된 통화별 일별 환율의 최신 요약입니다. 답변은 반드시 이 수치에 근거하세요.
+엔화(JPY)는 100엔당 원화 금액입니다.
 
 [데이터 요약]
 {summary}
 
 규칙:
-- 요약에 없는 특정 기간·월별 수치나 변동성 같은 세부 정보가 필요하면 제공된 도구를 호출하세요.
+- 요약에 없는 특정 기간·연도·월별 수치나 변동성 같은 세부 정보가 필요하면 제공된 도구를 호출하세요.
+- 사용자가 통화를 말하지 않으면 미국 달러(USD) 기준으로 답하세요.
 - 도구를 호출할 때는 reason 인자에 왜 그 도구가 필요한지 한 문장으로 적으세요.
 - 데이터에 없는 내용은 추측하지 말고 모른다고 말하세요. 투자 조언은 하지 마세요.
 - 답변은 간결하게, 숫자에는 단위(원, %)를 붙이세요."""
 
 _period_props = {
+    "currency": {
+        "type": "string",
+        "enum": list(CURRENCIES),
+        "description": "통화 코드: USD(달러), EUR(유로), JPY(엔, 100엔당), CNY(위안), GBP(파운드)",
+    },
     "start_date": {"type": "string", "description": "시작일 YYYY-MM-DD (선택)"},
     "end_date": {"type": "string", "description": "종료일 YYYY-MM-DD (선택)"},
     "reason": {"type": "string", "description": "이 도구를 호출하는 이유(한 문장)"},
@@ -38,15 +46,15 @@ TOOLS = [
         "function": {
             "name": "get_data_summary",
             "description": "지정한 기간의 데이터 요약(개수, 평균, 최고/최저, 변화율, 추세)을 구한다. 특정 기간을 물을 때 사용.",
-            "parameters": {"type": "object", "properties": _period_props, "required": ["reason"]},
+            "parameters": {"type": "object", "properties": _period_props, "required": ["currency", "reason"]},
         },
     },
     {
         "type": "function",
         "function": {
             "name": "get_statistics",
-            "description": "표준편차, 중앙값, 일간 변동성, 최대 낙폭, 이동평균(7/30), 월별 평균 등 상세 통계를 구한다.",
-            "parameters": {"type": "object", "properties": _period_props, "required": ["reason"]},
+            "description": "표준편차, 중앙값, 일간 변동성(일간 변화율의 표준편차), 최대 낙폭, 이동평균(7/30), 연도별·월별 평균 등 상세 통계를 구한다. 기간을 좁혀서 호출하는 것이 좋다.",
+            "parameters": {"type": "object", "properties": _period_props, "required": ["currency", "reason"]},
         },
     },
     {
@@ -60,7 +68,7 @@ TOOLS = [
                     **_period_props,
                     "limit": {"type": "integer", "description": "최대 개수(기본 30, 최대 60)"},
                 },
-                "required": ["reason"],
+                "required": ["currency", "reason"],
             },
         },
     },
@@ -89,15 +97,23 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+MAX_MONTHLY_ROWS = 24  # 도구 결과가 너무 길어지지 않도록 월별 통계는 최근 24개월만 전달
+
+
 def run_tool(name: str, args: dict):
     start, end = args.get("start_date"), args.get("end_date")
+    currency = args.get("currency") if args.get("currency") in CURRENCIES else "USD"
     if name == "get_data_summary":
-        return data_service.get_summary(start, end)
+        return data_service.get_summary(currency, start, end)
     if name == "get_statistics":
-        return data_service.get_statistics(start, end)
+        stats = data_service.get_statistics(currency, start, end)
+        if len(stats.get("monthly", [])) > MAX_MONTHLY_ROWS:
+            stats["monthly"] = stats["monthly"][-MAX_MONTHLY_ROWS:]
+            stats["note"] = f"월별 통계는 최근 {MAX_MONTHLY_ROWS}개월만 포함. 이전 월은 기간을 좁혀 다시 조회."
+        return stats
     if name == "list_data":
         limit = max(1, min(int(args.get("limit") or 30), 60))
-        items = data_service.list_data(start, end)[-limit:]
+        items = data_service.list_data(currency, start, end)[-limit:]
         return [{"date": i["date"], "value": i["value"], "memo": i.get("memo", "")} for i in items]
     if name == "list_conversations":
         return conversation_service.list_conversations()[:20]
@@ -116,8 +132,10 @@ def chat(message: str, conversation_id: str | None) -> dict:
         history = conv["messages"][-MAX_HISTORY:]
 
     # 1) 데이터 요약 조회  2) 시스템 프롬프트에 주입
-    summary = data_service.get_summary()
-    system_prompt = SYSTEM_TEMPLATE.format(summary=data_service.summary_to_text(summary))
+    summaries = data_service.get_all_summaries()
+    system_prompt = SYSTEM_TEMPLATE.format(
+        summary="\n\n".join(data_service.summary_to_text(s) for s in summaries)
+    )
     messages = [{"role": "system", "content": system_prompt}]
     messages += [{"role": m["role"], "content": m["content"]} for m in history]
     messages.append({"role": "user", "content": message})
@@ -170,4 +188,4 @@ def chat(message: str, conversation_id: str | None) -> dict:
         title = message if len(message) <= 30 else message[:30] + "…"
         conversation_id = conversation_service.create_conversation(title, new_messages)["id"]
 
-    return {"conversation_id": conversation_id, "reply": reply, "summary": summary, "tool_calls": tool_logs}
+    return {"conversation_id": conversation_id, "reply": reply, "summaries": summaries, "tool_calls": tool_logs}

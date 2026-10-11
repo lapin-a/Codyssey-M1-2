@@ -60,6 +60,14 @@ class FirestoreRepo:
             batch.commit()
         return len(items)
 
+    def delete_many(self, collection: str, doc_ids: list[str]) -> int:
+        for i in range(0, len(doc_ids), 400):
+            batch = self.client.batch()
+            for doc_id in doc_ids[i : i + 400]:
+                batch.delete(self.client.collection(collection).document(doc_id))
+            batch.commit()
+        return len(doc_ids)
+
 
 class MemoryRepo:
     backend = "memory"
@@ -97,6 +105,9 @@ class MemoryRepo:
             self.add(collection, item)
         return len(items)
 
+    def delete_many(self, collection: str, doc_ids: list[str]) -> int:
+        return sum(self.delete(collection, d) for d in doc_ids)
+
 
 def _load_credentials():
     from firebase_admin import credentials
@@ -112,13 +123,16 @@ def _load_sample_csv(target: MemoryRepo) -> None:
     import csv
     from pathlib import Path
 
-    path = Path(__file__).resolve().parent.parent / "data" / "usd_krw.csv"
+    path = Path(__file__).resolve().parent.parent / "data" / "fx_krw.csv"
     if not path.exists():
         return
     with path.open(encoding="utf-8") as f:
         target.add_many(
             DATA_COLLECTION,
-            [{"date": r["date"], "value": float(r["value"]), "memo": r["memo"]} for r in csv.DictReader(f)],
+            [
+                {"date": r["date"], "currency": r["currency"], "value": float(r["value"]), "memo": r["memo"]}
+                for r in csv.DictReader(f)
+            ],
         )
 
 

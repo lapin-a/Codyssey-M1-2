@@ -12,7 +12,7 @@
 </head>
 <body>
   <header class="topbar">
-    <h1>💱 환율 AI 챗봇 <small>USD/KRW</small></h1>
+    <h1>💱 환율 AI 챗봇 <small>원화 기준 · 5개 통화 · 10년</small></h1>
     <nav class="tabs" role="tablist">
       <button class="tab active" data-tab="chat" role="tab">채팅</button>
       <button class="tab" data-tab="data" role="tab">데이터 관리</button>
@@ -22,13 +22,22 @@
 
   <div id="banner" class="banner hidden"></div>
 
+  <!-- 통화 선택: 요약 바, 그래프, 목록이 이 통화를 따른다 -->
+  <nav class="currency-bar" id="currencyBar" aria-label="통화 선택">
+    <button class="cur active" data-cur="USD">달러 <small>USD</small></button>
+    <button class="cur" data-cur="EUR">유로 <small>EUR</small></button>
+    <button class="cur" data-cur="JPY">엔 <small>JPY·100엔</small></button>
+    <button class="cur" data-cur="CNY">위안 <small>CNY</small></button>
+    <button class="cur" data-cur="GBP">파운드 <small>GBP</small></button>
+  </nav>
+
   <!-- 요약 바: 두 탭 공통 -->
   <section class="summary" id="summary" aria-label="데이터 요약">
     <div class="stat"><span>기간</span><b id="sPeriod">-</b></div>
     <div class="stat"><span>개수</span><b id="sCount">-</b></div>
     <div class="stat"><span>평균</span><b id="sMean">-</b></div>
     <div class="stat"><span>최고 / 최저</span><b id="sMaxMin">-</b></div>
-    <div class="stat"><span>최신값</span><b id="sLatest">-</b></div>
+    <div class="stat"><span id="sLatestLabel">최신값</span><b id="sLatest">-</b></div>
     <div class="stat"><span>최근 추세</span><b id="sTrend">-</b></div>
   </section>
 
@@ -47,9 +56,10 @@
         <div class="empty" id="chatEmpty">
           <p>저장된 환율 데이터를 바탕으로 답해 드려요.</p>
           <div class="suggestions">
-            <button class="chip">최근 환율 추세가 어때?</button>
-            <button class="chip">기간 중 최고점은 언제였어?</button>
-            <button class="chip">2026년 7월 변동성을 알려줘</button>
+            <button class="chip">최근 달러 환율 추세가 어때?</button>
+            <button class="chip">최근 1년 동안 가장 많이 떨어진 통화는?</button>
+            <button class="chip">엔화가 10년 동안 가장 높았던 때는?</button>
+            <button class="chip">2020년 유로 환율 변동성을 알려줘</button>
           </div>
         </div>
       </div>
@@ -64,8 +74,16 @@
   <main id="tab-data" class="tab-panel data-layout hidden">
     <section class="card chart-card">
       <div class="card-head">
-        <h2>환율 추이</h2>
-        <div class="legend"><span class="dot l1"></span>일별 값 <span class="dot l2"></span>7일 이동평균</div>
+        <h2 id="chartTitle">환율 추이</h2>
+        <div class="row">
+          <div class="legend"><span class="dot l1"></span>일별 값 <span class="dot l2"></span><span id="maLabel">7일 이동평균</span></div>
+          <div class="seg" id="rangeSeg">
+            <button data-range="1">1년</button>
+            <button data-range="3">3년</button>
+            <button data-range="5">5년</button>
+            <button data-range="0" class="active">전체</button>
+          </div>
+        </div>
       </div>
       <div class="chart-wrap"><canvas id="chart"></canvas><div id="tooltip" class="tooltip hidden"></div></div>
       <div class="extra-stats" id="extraStats"></div>
@@ -75,6 +93,15 @@
       <div class="card-head"><h2 id="formTitle">새 데이터 추가</h2></div>
       <form id="dataForm" class="data-form">
         <label>날짜<input type="date" id="fDate" required /></label>
+        <label>통화
+          <select id="fCurrency" required>
+            <option value="USD">USD 달러</option>
+            <option value="EUR">EUR 유로</option>
+            <option value="JPY">JPY 엔(100엔)</option>
+            <option value="CNY">CNY 위안</option>
+            <option value="GBP">GBP 파운드</option>
+          </select>
+        </label>
         <label>값(원)<input type="number" id="fValue" step="0.01" min="0.01" required /></label>
         <label class="grow">메모<input type="text" id="fMemo" maxlength="200" placeholder="선택" /></label>
         <div class="form-actions">
@@ -97,6 +124,7 @@
           <thead><tr><th>날짜</th><th class="num">값</th><th>메모</th><th></th></tr></thead>
           <tbody id="dataBody"></tbody>
         </table>
+        <button class="btn small more hidden" id="moreBtn" type="button">더 보기</button>
       </div>
     </section>
   </main>

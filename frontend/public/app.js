@@ -3,9 +3,21 @@
 const API = (window.API_BASE_URL || "http://localhost:8000").replace(/\/+$/, "");
 const $ = (sel) => document.querySelector(sel);
 
+const CURRENCIES = {
+  USD: { name: "달러", unit: "1달러" },
+  EUR: { name: "유로", unit: "1유로" },
+  JPY: { name: "엔", unit: "100엔" },
+  CNY: { name: "위안", unit: "1위안" },
+  GBP: { name: "파운드", unit: "1파운드" },
+};
+const PAGE_SIZE = 100;
+
 const state = {
+  currency: "USD",
   conversationId: null,
   data: [],
+  shown: PAGE_SIZE,
+  rangeYears: 0,
   editingId: null,
   sending: false,
 };
@@ -95,7 +107,11 @@ function renderSummary(s) {
   $("#sCount").textContent = `${s.count}개`;
   $("#sMean").textContent = s.count ? `${fmt(s.mean)}원` : "-";
   $("#sMaxMin").textContent = s.count ? `${fmt(s.max)} / ${fmt(s.min)}` : "-";
-  $("#sLatest").textContent = s.count ? `${fmt(s.latest_value)}원 (${s.change_pct > 0 ? "+" : ""}${s.change_pct}%)` : "-";
+  const sign = (n) => (n > 0 ? "+" : "") + n;
+  $("#sLatestLabel").textContent = `최신값 (${s.unit}, 1년 변화)`;
+  $("#sLatest").textContent = s.count
+    ? `${fmt(s.latest_value)}원` + (s.change_1y_pct != null ? ` (${sign(s.change_1y_pct)}%)` : "")
+    : "-";
   const trend = $("#sTrend");
   const icon = { 증가: "▲", 감소: "▼", 유지: "■" }[s.trend] || "";
   trend.textContent = `${icon} ${s.trend}`;
@@ -105,7 +121,7 @@ function renderSummary(s) {
 
 async function loadSummary() {
   try {
-    renderSummary(await request("/api/data/summary"));
+    renderSummary(await request(`/api/data/summary?currency=${state.currency}`));
   } catch (err) {
     toast(`요약을 불러오지 못했습니다: ${err.message}`, true);
   }
@@ -166,7 +182,8 @@ async function sendMessage(text) {
     typing.remove();
     addMessage("assistant", res.reply);
     addToolInfo(res.tool_calls);
-    renderSummary(res.summary);
+    const current = res.summaries.find((s) => s.currency === state.currency);
+    if (current) renderSummary(current);
     state.conversationId = res.conversation_id;
     loadConversations();
   } catch (err) {
@@ -251,8 +268,9 @@ function newChat() {
 // ---------- 데이터 관리 ----------
 async function loadData(flashId) {
   try {
-    const res = await request("/api/data");
+    const res = await request(`/api/data?currency=${state.currency}`);
     state.data = res.items;
+    if (!flashId) state.shown = PAGE_SIZE;
     renderTable(flashId);
     drawChart();
   } catch (err) {
@@ -264,8 +282,15 @@ function renderTable(flashId) {
   const body = $("#dataBody");
   body.replaceChildren();
   $("#dataCount").textContent = `(${state.data.length}개)`;
-  // 최신 날짜가 위로 오도록 역순 표시
-  for (const item of [...state.data].reverse()) {
+  // 최신 날짜가 위로 오도록 역순 표시, 많으면 PAGE_SIZE씩 나눠 그린다
+  const rows = [...state.data].reverse();
+  if (flashId) {
+    const idx = rows.findIndex((r) => r.id === flashId);
+    if (idx >= state.shown) state.shown = idx + 1;
+  }
+  $("#moreBtn").classList.toggle("hidden", rows.length <= state.shown);
+  $("#moreBtn").textContent = `더 보기 (${state.shown.toLocaleString()} / ${rows.length.toLocaleString()})`;
+  for (const item of rows.slice(0, state.shown)) {
     const tr = document.createElement("tr");
     tr.innerHTML = '<td></td><td class="num"></td><td></td><td class="actions"><button class="btn small">수정</button> <button class="btn small danger">삭제</button></td>';
     tr.children[0].textContent = item.date;
@@ -283,6 +308,7 @@ function renderTable(flashId) {
 function startEdit(item) {
   state.editingId = item.id;
   $("#fDate").value = item.date;
+  $("#fCurrency").value = item.currency;
   $("#fValue").value = item.value;
   $("#fMemo").value = item.memo || "";
   $("#formTitle").textContent = `데이터 수정 (${item.date})`;
@@ -295,6 +321,7 @@ function resetForm() {
   state.editingId = null;
   $("#dataForm").reset();
   $("#fDate").value = new Date().toISOString().slice(0, 10);
+  $("#fCurrency").value = state.currency;
   $("#formTitle").textContent = "새 데이터 추가";
   $("#fSubmit").textContent = "추가";
   $("#fCancel").classList.add("hidden");
@@ -304,6 +331,7 @@ async function submitData(e) {
   e.preventDefault();
   const payload = {
     date: $("#fDate").value,
+    currency: $("#fCurrency").value,
     value: Number($("#fValue").value),
     memo: $("#fMemo").value.trim(),
   };
@@ -318,6 +346,7 @@ async function submitData(e) {
       saved = await request("/api/data", { method: "POST", body: JSON.stringify(payload) });
       toast(`✅ ${saved.date} 데이터를 추가했습니다.`);
     }
+    if (saved.currency !== state.currency) selectCurrency(saved.currency, false);
     resetForm();
     await Promise.all([loadData(saved.id), loadSummary(), loadStatistics()]);
   } catch (err) {
@@ -341,10 +370,10 @@ async function deleteData(item) {
 
 async function exportData(format) {
   try {
-    const res = await fetch(`${API}/api/data/export?format=${format}`);
+    const res = await fetch(`${API}/api/data/export?format=${format}&currency=${state.currency}`);
     if (!res.ok) throw new Error(`요청 실패 (${res.status})`);
     const url = URL.createObjectURL(await res.blob());
-    const a = Object.assign(document.createElement("a"), { href: url, download: `usd_krw.${format}` });
+    const a = Object.assign(document.createElement("a"), { href: url, download: `${state.currency.toLowerCase()}_krw.${format}` });
     a.click();
     URL.revokeObjectURL(url);
   } catch (err) {
@@ -354,7 +383,7 @@ async function exportData(format) {
 
 async function loadStatistics() {
   try {
-    const s = await request("/api/data/statistics");
+    const s = await request(`/api/data/statistics?currency=${state.currency}`);
     const items = [
       ["표준편차", s.std != null ? `${fmt(s.std)}원` : "-"],
       ["중앙값", s.median != null ? `${fmt(s.median)}원` : "-"],
@@ -405,7 +434,17 @@ function drawChart() {
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, W, H);
 
-  const data = state.data;
+  let data = state.data;
+  if (state.rangeYears && data.length) {
+    const last = new Date(data[data.length - 1].date);
+    last.setFullYear(last.getFullYear() - state.rangeYears);
+    const cutoff = last.toISOString().slice(0, 10);
+    data = data.filter((d) => d.date >= cutoff);
+  }
+  // 기간이 길면 7일 대신 30일 이동평균이 추세를 더 잘 보여준다
+  const maN = data.length > 800 ? 30 : 7;
+  $("#maLabel").textContent = `${maN}일 이동평균`;
+  $("#chartTitle").textContent = `${CURRENCIES[state.currency].name} 환율 추이 (${CURRENCIES[state.currency].unit}당 원)`;
   if (data.length < 2) {
     ctx.fillStyle = cssVar("--muted");
     ctx.font = "14px sans-serif";
@@ -416,7 +455,7 @@ function drawChart() {
   const pad = { l: 56, r: 12, t: 12, b: 28 };
   const area = { x: pad.l, y: pad.t, w: W - pad.l - pad.r, h: H - pad.t - pad.b };
   const values = data.map((d) => d.value);
-  const ma = movingAverage(values, 7);
+  const ma = movingAverage(values, maN);
   let min = Math.min(...values);
   let max = Math.max(...values);
   const margin = (max - min) * 0.08 || 1;
@@ -442,18 +481,19 @@ function drawChart() {
     ctx.fillText(Math.round(v).toLocaleString("ko-KR"), area.x - 8, yy);
   }
 
-  // x축: 월 시작 지점 라벨
+  // x축: 2년 넘게 보이면 연도, 아니면 월 시작 지점에 라벨
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  let lastMonth = "";
+  const byYear = data.length > 520;
+  let lastKey = "";
   let lastX = -Infinity;
   data.forEach((d, i) => {
-    const m = d.date.slice(0, 7);
-    if (m !== lastMonth && x(i) - lastX > 48) {
-      ctx.fillText(`${d.date.slice(2, 4)}.${d.date.slice(5, 7)}`, x(i), area.y + area.h + 8);
+    const key = byYear ? d.date.slice(0, 4) : d.date.slice(0, 7);
+    if (key !== lastKey && lastKey && x(i) - lastX > 48) {
+      ctx.fillText(byYear ? key : `${d.date.slice(2, 4)}.${d.date.slice(5, 7)}`, x(i), area.y + area.h + 8);
       lastX = x(i);
     }
-    lastMonth = m;
+    lastKey = key;
   });
 
   const line = (vals, color, width) => {
@@ -484,10 +524,22 @@ function onChartHover(e) {
   const mx = e.clientX - rect.left;
   let best = chart.points[0];
   for (const p of chart.points) if (Math.abs(p.x - mx) < Math.abs(best.x - mx)) best = p;
-  tip.textContent = `${best.d.date}  ${fmt(best.d.value)}원` + (best.ma != null ? ` · MA7 ${fmt(best.ma)}` : "");
+  tip.textContent = `${best.d.date}  ${fmt(best.d.value)}원` + (best.ma != null ? ` · 이동평균 ${fmt(best.ma)}` : "");
   tip.style.left = `${best.x}px`;
   tip.style.top = `${best.y}px`;
   tip.classList.remove("hidden");
+}
+
+// ---------- 통화 선택 ----------
+function selectCurrency(code, reload = true) {
+  if (!CURRENCIES[code]) return;
+  state.currency = code;
+  document.querySelectorAll(".cur").forEach((b) => b.classList.toggle("active", b.dataset.cur === code));
+  try {
+    localStorage.setItem("currency", code);
+  } catch (_) {}
+  if (!state.editingId) $("#fCurrency").value = code;
+  if (reload) Promise.all([loadSummary(), loadData(), loadStatistics()]);
 }
 
 // ---------- 탭/테마 ----------
@@ -539,6 +591,18 @@ function bindEvents() {
   $("#dataForm").addEventListener("submit", submitData);
   $("#fCancel").addEventListener("click", resetForm);
   document.querySelectorAll("[data-export]").forEach((b) => b.addEventListener("click", () => exportData(b.dataset.export)));
+  document.querySelectorAll(".cur").forEach((b) => b.addEventListener("click", () => selectCurrency(b.dataset.cur)));
+  document.querySelectorAll("#rangeSeg button").forEach((b) =>
+    b.addEventListener("click", () => {
+      state.rangeYears = Number(b.dataset.range);
+      document.querySelectorAll("#rangeSeg button").forEach((x) => x.classList.toggle("active", x === b));
+      drawChart();
+    })
+  );
+  $("#moreBtn").addEventListener("click", () => {
+    state.shown += PAGE_SIZE;
+    renderTable();
+  });
   const canvas = $("#chart");
   canvas.addEventListener("mousemove", onChartHover);
   canvas.addEventListener("mouseleave", () => $("#tooltip").classList.add("hidden"));
@@ -548,6 +612,10 @@ function bindEvents() {
 async function init() {
   bindEvents();
   updateThemeIcon();
+  try {
+    const saved = localStorage.getItem("currency");
+    if (saved) selectCurrency(saved, false);
+  } catch (_) {}
   resetForm();
   if (location.hash === "#data") switchTab("data");
   if (!(await wakeServer())) return;

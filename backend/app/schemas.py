@@ -4,11 +4,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from .currencies import Currency
+
 
 # ---------- 데이터 ----------
 class DataCreate(BaseModel):
     date: Date = Field(..., description="YYYY-MM-DD 형식 날짜", examples=["2026-10-09"])
-    value: float = Field(..., gt=0, lt=1_000_000, description="원/달러 환율 값", examples=[1341.49])
+    currency: Currency = Field(..., description="통화 코드", examples=["USD"])
+    value: float = Field(..., gt=0, lt=1_000_000, description="원화 환산 값(엔화는 100엔당)", examples=[1341.49])
     memo: str = Field("", max_length=200, description="메모(최대 200자)")
 
     @field_validator("date")
@@ -28,6 +31,7 @@ class DataUpdate(BaseModel):
     """부분 수정: 보낸 필드만 바뀐다."""
 
     date: Date | None = None
+    currency: Currency | None = None
     value: float | None = Field(None, gt=0, lt=1_000_000)
     memo: str | None = Field(None, max_length=200)
 
@@ -42,6 +46,7 @@ class DataUpdate(BaseModel):
 class DataItem(BaseModel):
     id: str
     date: str
+    currency: str = "USD"
     value: float
     memo: str = ""
     created_at: str | None = None
@@ -54,6 +59,9 @@ class DataList(BaseModel):
 
 
 class Summary(BaseModel):
+    currency: str
+    currency_name: str
+    unit: str = Field(..., description="값의 기준 단위(예: 100엔)")
     count: int
     period_start: str | None = None
     period_end: str | None = None
@@ -65,11 +73,13 @@ class Summary(BaseModel):
     first_value: float | None = None
     latest_value: float | None = None
     change_pct: float | None = Field(None, description="기간 전체 변화율(%)")
+    change_1y_pct: float | None = Field(None, description="최근 1년 변화율(%)")
     trend: Literal["증가", "감소", "유지", "데이터 부족"]
     trend_detail: str = ""
 
 
 class Statistics(BaseModel):
+    currency: str
     count: int
     std: float | None = None
     median: float | None = None
@@ -77,6 +87,7 @@ class Statistics(BaseModel):
     max_drawdown_pct: float | None = Field(None, description="최고점 대비 최대 하락률(%)")
     ma7: float | None = Field(None, description="최근 7개 이동평균")
     ma30: float | None = Field(None, description="최근 30개 이동평균")
+    yearly: list[dict] = Field(default_factory=list, description="연도별 평균/최대/최소")
     monthly: list[dict] = Field(default_factory=list, description="월별 평균/최대/최소")
 
 
@@ -128,5 +139,5 @@ class ToolCallLog(BaseModel):
 class ChatResponse(BaseModel):
     conversation_id: str
     reply: str
-    summary: Summary
+    summaries: list[Summary] = Field(..., description="프롬프트에 주입된 통화별 요약")
     tool_calls: list[ToolCallLog] = Field(default_factory=list)
