@@ -31,7 +31,7 @@
 
 - **Backend**: Python 3.12, FastAPI, Uvicorn, Pydantic v2
 - **DB**: Firebase Firestore (`firebase-admin`)
-- **AI**: OpenAI Python SDK (`gpt-5-mini`, Codyssey 프록시 `https://copa.codyssey.kr/v1`), Function Calling
+- **AI**: OpenAI Python SDK (`gpt-5.5`, Codyssey 프록시 `https://copa.codyssey.kr/v1`), Function Calling
 - **Frontend**: HTML / CSS / JavaScript (프레임워크 없음, 그래프는 Canvas로 직접 그림)
 - **배포**: Render(백엔드), Vercel(프론트엔드)
 
@@ -203,7 +203,7 @@ python -m http.server 5500 -d public   # http://localhost:5500
 | --- | --- | --- |
 | `OPENAI_API_KEY` | ✅ | OpenAI(또는 Codyssey 프록시) API 키 |
 | `OPENAI_BASE_URL` | | OpenAI 호환 프록시 주소. 예: `https://copa.codyssey.kr/v1` |
-| `OPENAI_MODEL` | | 기본 `gpt-5-mini` |
+| `OPENAI_MODEL` | | 기본 `gpt-5.5` (프록시에서 쓸 수 있는 GPT 중 최신) |
 | `OPENAI_MAX_TOKENS` | | 응답 최대 토큰(비용 제한), 기본 `2000` |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | ✅* | 서비스 계정 키 JSON **전체 내용**(배포용) |
 | `FIREBASE_SERVICE_ACCOUNT_PATH` | ✅* | 서비스 계정 키 파일 경로(로컬용) |

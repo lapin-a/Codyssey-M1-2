@@ -13,7 +13,7 @@ services:
       - key: OPENAI_BASE_URL
         value: https://copa.codyssey.kr/v1
       - key: OPENAI_MODEL
-        value: gpt-5-mini
+        value: gpt-5.5
       - key: OPENAI_MAX_TOKENS
         value: "2000"
       - key: OPENAI_API_KEY
