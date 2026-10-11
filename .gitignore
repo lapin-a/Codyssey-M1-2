@@ -1,0 +1,16 @@
+# secrets
+.env
+*.env
+!.env.example
+serviceAccountKey.json
+*-firebase-adminsdk-*.json
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# frontend build output
+frontend/public/config.js
+.vercel/
+node_modules/

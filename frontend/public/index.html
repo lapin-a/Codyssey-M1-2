@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>환율 AI 챗봇</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="config.js"></script>
+  <script>
+    try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <h1>💱 환율 AI 챗봇 <small>USD/KRW</small></h1>
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="chat" role="tab">채팅</button>
+      <button class="tab" data-tab="data" role="tab">데이터 관리</button>
+    </nav>
+    <button id="themeToggle" class="icon-btn" title="다크 모드 전환" aria-label="다크 모드 전환">🌙</button>
+  </header>
+
+  <div id="banner" class="banner hidden"></div>
+
+  <!-- 요약 바: 두 탭 공통 -->
+  <section class="summary" id="summary" aria-label="데이터 요약">
+    <div class="stat"><span>기간</span><b id="sPeriod">-</b></div>
+    <div class="stat"><span>개수</span><b id="sCount">-</b></div>
+    <div class="stat"><span>평균</span><b id="sMean">-</b></div>
+    <div class="stat"><span>최고 / 최저</span><b id="sMaxMin">-</b></div>
+    <div class="stat"><span>최신값</span><b id="sLatest">-</b></div>
+    <div class="stat"><span>최근 추세</span><b id="sTrend">-</b></div>
+  </section>
+
+  <!-- 채팅 탭 -->
+  <main id="tab-chat" class="tab-panel chat-layout">
+    <aside class="sidebar">
+      <div class="sidebar-head">
+        <h2>대화 기록</h2>
+        <button id="newChat" class="btn small">+ 새 대화</button>
+      </div>
+      <ul id="convList" class="conv-list"></ul>
+    </aside>
+
+    <section class="chat">
+      <div id="messages" class="messages">
+        <div class="empty" id="chatEmpty">
+          <p>저장된 환율 데이터를 바탕으로 답해 드려요.</p>
+          <div class="suggestions">
+            <button class="chip">최근 환율 추세가 어때?</button>
+            <button class="chip">기간 중 최고점은 언제였어?</button>
+            <button class="chip">2026년 7월 변동성을 알려줘</button>
+          </div>
+        </div>
+      </div>
+      <form id="chatForm" class="chat-form">
+        <textarea id="chatInput" rows="1" maxlength="2000" placeholder="질문을 입력하세요 (Enter 전송, Shift+Enter 줄바꿈)" required></textarea>
+        <button class="btn primary" id="sendBtn" type="submit">전송</button>
+      </form>
+    </section>
+  </main>
+
+  <!-- 데이터 탭 -->
+  <main id="tab-data" class="tab-panel data-layout hidden">
+    <section class="card chart-card">
+      <div class="card-head">
+        <h2>환율 추이</h2>
+        <div class="legend"><span class="dot l1"></span>일별 값 <span class="dot l2"></span>7일 이동평균</div>
+      </div>
+      <div class="chart-wrap"><canvas id="chart"></canvas><div id="tooltip" class="tooltip hidden"></div></div>
+      <div class="extra-stats" id="extraStats"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h2 id="formTitle">새 데이터 추가</h2></div>
+      <form id="dataForm" class="data-form">
+        <label>날짜<input type="date" id="fDate" required /></label>
+        <label>값(원)<input type="number" id="fValue" step="0.01" min="0.01" required /></label>
+        <label class="grow">메모<input type="text" id="fMemo" maxlength="200" placeholder="선택" /></label>
+        <div class="form-actions">
+          <button class="btn primary" type="submit" id="fSubmit">추가</button>
+          <button class="btn hidden" type="button" id="fCancel">취소</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>데이터 목록 <small id="dataCount"></small></h2>
+        <div class="row">
+          <button class="btn small" data-export="csv">CSV 내보내기</button>
+          <button class="btn small" data-export="json">JSON 내보내기</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>날짜</th><th class="num">값</th><th>메모</th><th></th></tr></thead>
+          <tbody id="dataBody"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script src="app.js"></script>
+</body>
+</html>
