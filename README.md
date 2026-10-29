@@ -20,7 +20,7 @@
 
 | 구분 | URL |
 | --- | --- |
-| 프론트엔드 (Vercel) | `https://<your-app>.vercel.app` |
+| 프론트엔드 (Vercel) | https://codyssey-m1-2-frontend.vercel.app |
 | 백엔드 API (Render) | https://fxbot-f8eq.onrender.com |
 | Swagger UI | https://fxbot-f8eq.onrender.com/docs |
 
@@ -313,7 +313,7 @@ python -m scripts.update_rates --firestore  # Firestore에 빠진 날짜만 추�
 | `OPENAI_MAX_TOKENS` | | 응답 최대 토큰(비용 제한), 기본 `2000` |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | ✅* | 서비스 계정 키 JSON **전체 내용**(배포용) |
 | `FIREBASE_SERVICE_ACCOUNT_PATH` | ✅* | 서비스 계정 키 파일 경로(로컬용) |
-| `ALLOWED_ORIGINS` | ✅ | CORS 허용 도메인, 쉼표 구분. 예: `https://<your-app>.vercel.app,http://localhost:5500` |
+| `ALLOWED_ORIGINS` | ✅ | CORS 허용 도메인, 쉼표 구분. 예: `https://codyssey-m1-2-frontend.vercel.app,http://localhost:5500` |
 
 \* 둘 중 하나만 있으면 됩니다.
 
