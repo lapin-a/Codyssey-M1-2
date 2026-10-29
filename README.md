@@ -21,8 +21,8 @@
 | 구분 | URL |
 | --- | --- |
 | 프론트엔드 (Vercel) | `https://<your-app>.vercel.app` |
-| 백엔드 API (Render) | `https://<your-api>.onrender.com` |
-| Swagger UI | `https://<your-api>.onrender.com/docs` |
+| 백엔드 API (Render) | https://fxbot-f8eq.onrender.com |
+| Swagger UI | https://fxbot-f8eq.onrender.com/docs |
 
 > ⏳ **Render 무료 플랜 안내**: 15분간 요청이 없으면 서버가 잠듭니다. 첫 접속 시 30초~1분 정도 걸릴 수 있습니다.
 > 프론트엔드는 접속하자마자 `/health`로 서버를 깨우고, 2.5초 이상 걸리면 "서버를 깨우는 중" 안내 배너를 띄운 뒤 응답이 올 때까지 재시도합니다.
@@ -237,7 +237,7 @@ claude mcp add fx-ai-chat --env API_BASE_URL=http://localhost:8000 -- mcp_server
     "fx-ai-chat": {
       "command": "C:/path/to/Codyssey-M1-2/mcp_server/.venv/Scripts/python.exe",
       "args": ["C:/path/to/Codyssey-M1-2/mcp_server/server.py"],
-      "env": { "API_BASE_URL": "https://<your-api>.onrender.com", "PYTHONIOENCODING": "utf-8" }
+      "env": { "API_BASE_URL": "https://fxbot-f8eq.onrender.com", "PYTHONIOENCODING": "utf-8" }
     }
   }
 }
@@ -321,7 +321,7 @@ python -m scripts.update_rates --firestore  # Firestore에 빠진 날짜만 추�
 
 | 이름 | 필수 | 설명 |
 | --- | --- | --- |
-| `API_BASE_URL` | ✅ | 백엔드 주소. 예: `https://<your-api>.onrender.com` |
+| `API_BASE_URL` | ✅ | 백엔드 주소. 예: `https://fxbot-f8eq.onrender.com` |
 
 ### 키 관리와 CORS를 이렇게 한 이유
 
@@ -342,13 +342,13 @@ python -m scripts.update_rates --firestore  # Firestore에 빠진 날짜만 추�
    - Start Command: `uvicorn main:app --host 0.0.0.0 --port $PORT`
    - (또는 **New → Blueprint**로 `render.yaml` 사용)
 3. Environment에 위 백엔드 환경 변수를 입력합니다. `FIREBASE_SERVICE_ACCOUNT_JSON`에는 키 파일 내용을 그대로 붙여 넣습니다.
-4. 배포 후 `https://<your-api>.onrender.com/docs`에서 Swagger UI를 확인합니다.
+4. 배포 후 `https://fxbot-f8eq.onrender.com/docs`에서 Swagger UI를 확인합니다.
 
 ### 프론트엔드 — Vercel
 
 1. Vercel → **Add New Project** → 같은 저장소 선택
 2. Root Directory: `frontend` (Build Command/Output은 `vercel.json`에 지정됨)
-3. Environment Variables에 `API_BASE_URL=https://<your-api>.onrender.com` 추가 후 배포
+3. Environment Variables에 `API_BASE_URL=https://fxbot-f8eq.onrender.com` 추가 후 배포
 4. 발급된 Vercel 도메인을 Render의 `ALLOWED_ORIGINS`에 추가합니다.
 
 ## 제출 스크린샷
