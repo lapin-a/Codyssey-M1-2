@@ -118,7 +118,13 @@ conversations/{autoId}
   title: "최근 환율 추세가 어때?"
   messages: [ { role: "user"|"assistant", content, created_at }, ... ]
   created_at, updated_at
+
+data_snapshots/{USD|EUR|JPY|CNY|GBP}      # 읽기 절약용, 통화별 1개
+  payload: "[{id, date, currency, value, memo, ...}, ...]"   (해당 통화 data 전체를 JSON 문자열로)
+  count: 2573   updated_at
 ```
+
+`data`가 원본이고 CRUD API는 `data` 문서를 하나씩 추가/수정/삭제합니다. `data_snapshots`는 서버가 시작할 때 1.3만 건 대신 **5건만 읽기 위한 사본**으로, 추가/수정/삭제 때마다 해당 통화의 스냅샷도 함께 다시 씁니다. (배열 대신 문자열로 저장하는 이유: 배열 필드는 항목마다 색인돼 문서당 색인 한도 4만 개를 넘습니다.)
 
 ### 입력 검증 (Pydantic)
 
@@ -296,8 +302,10 @@ CSV와 Firestore는 자동으로 갱신되지 않습니다. 아래 스크립트�
 ```bash
 cd backend
 python -m scripts.update_rates              # data/fx_krw.csv 갱신 (기본)
-python -m scripts.update_rates --firestore  # Firestore에 빠진 날짜만 추가 (자격 증명 필요)
+python -m scripts.update_rates --firestore  # Firestore에 빠진 날짜만 추가 + 스냅샷 갱신 (자격 증명 필요)
 ```
+
+`--firestore`는 스냅샷 5건만 읽고 새 데이터만 씁니다. 이미 실행 중인 서버(Render)는 메모리 캐시를 쓰므로, 반영하려면 재시작(Manual Deploy)이 필요합니다. 스냅샷이 원본과 어긋났다고 의심되면 `python -m scripts.seed --snapshots`로 다시 만들 수 있습니다(전체 읽기 1회).
 
 > `--firestore`는 중복 확인을 위해 data 컬렉션 전체를 한 번 읽습니다(읽기 약 1.3만 회). 실행 후 백엔드 서버를 재시작해야 메모리 캐시에 반영됩니다.
 
@@ -329,7 +337,11 @@ python -m scripts.update_rates --firestore  # Firestore에 빠진 날짜만 추�
 - **OpenAI 키는 백엔드에만**: 프론트엔드 JS는 누구나 볼 수 있으므로 키를 두면 바로 유출됩니다. 프론트는 백엔드 주소(`API_BASE_URL`)만 압니다.
 - **CORS**: 브라우저는 다른 도메인(Vercel → Render)으로의 요청을 기본적으로 막습니다. `ALLOWED_ORIGINS`에 등록한 내 프론트 도메인만 허용해, 다른 사이트가 내 API를 브라우저에서 호출해 OpenAI 비용을 쓰는 것을 줄입니다.
 - **비용 제한**: `max_completion_tokens`, 이전 대화 최대 10개, 도구 호출 최대 3회, 메시지 2000자 제한을 둡니다.
-- **Firestore 읽기 한도**: 무료 플랜은 하루 읽기 5만 회입니다. 1만 2천여 건을 요청마다 읽으면 질문 4번이면 한도를 넘기 때문에, 서버가 처음 한 번만 전체를 읽어 **메모리에 캐시**하고 추가/수정/삭제 때 캐시를 함께 갱신합니다. 초기 적재(`seed`)도 쓰기 약 1.3만 회라 하루 2만 회 한도 안에서 한 번만 실행하세요.
+- **Firestore 읽기 한도**: 무료 플랜은 하루 읽기 5만 회입니다. 1.3만 건을 요청마다 읽으면 질문 4번이면 한도를 넘기 때문에 두 단계로 줄였습니다.
+  1. 요청은 **메모리 캐시**에서 처리하고, 추가/수정/삭제 때 캐시를 함께 갱신합니다.
+  2. 캐시를 채울 때(서버 시작, Render 무료 서버가 잠들었다 깨어날 때)는 전체 대신 **통화별 스냅샷 5건만** 읽습니다.
+  - 실제로 겪은 문제: 처음에는 서버가 시작할 때마다 1.3만 건을 읽었는데, 배포·재배포를 4번 하자 하루 한도를 넘어 `429 Quota exceeded`가 났습니다. 스냅샷 방식으로 바꾼 뒤에는 시작할 때마다 읽기 5회입니다.
+  - 초기 적재(`seed`)는 쓰기 약 1.3만 회라 하루 2만 회 한도 안에서 한 번만 실행하세요.
 
 ## 배포
 

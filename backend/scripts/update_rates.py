@@ -73,12 +73,14 @@ def update_csv() -> None:
 
 
 def update_firestore() -> None:
-    from app.db import DATA_COLLECTION, repo
+    from app.db import repo
+    from app.services import data_service
 
     if repo.backend != "firestore":
         sys.exit("Firebase 자격 증명이 없습니다. .env 의 FIREBASE_SERVICE_ACCOUNT_* 를 설정하세요.")
-    docs = repo.list(DATA_COLLECTION)
-    existing = {(d["date"], d.get("currency", "USD")) for d in docs}
+    # 스냅샷 5건만 읽어 현재 데이터를 파악한다(전체 1.3만 건을 읽지 않음)
+    docs = data_service.list_data()
+    existing = {(d["date"], d["currency"]) for d in docs}
     last_dates: dict[str, str] = {}
     for d, c in existing:
         last_dates[c] = max(last_dates.get(c, ""), d)
@@ -88,8 +90,8 @@ def update_firestore() -> None:
         print("추가할 데이터가 없습니다. 이미 최신입니다.")
         return
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    repo.add_many(DATA_COLLECTION, [{**r, "created_at": now, "updated_at": now} for r in new])
-    print(f"Firestore에 {len(new)}개를 추가했습니다. (서버를 재시작해야 캐시에 반영됩니다)")
+    data_service.add_many_data([{**r, "created_at": now, "updated_at": now} for r in new])
+    print(f"Firestore에 {len(new)}개를 추가하고 스냅샷을 갱신했습니다. (실행 중인 서버는 재시작해야 반영됩니다)")
 
 
 if __name__ == "__main__":

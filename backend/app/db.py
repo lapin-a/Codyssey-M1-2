@@ -17,6 +17,8 @@ logger = logging.getLogger(__name__)
 
 DATA_COLLECTION = "data"
 CONVERSATIONS_COLLECTION = "conversations"
+# 통화별 전체 데이터를 JSON 문자열 하나로 담은 문서. 서버 시작 시 1.3만 건 대신 5건만 읽기 위함.
+SNAPSHOT_COLLECTION = "data_snapshots"
 
 
 class FirestoreRepo:
@@ -37,6 +39,9 @@ class FirestoreRepo:
         ref.set(data)
         return {"id": ref.id, **data}
 
+    def set(self, collection: str, doc_id: str, data: dict[str, Any]) -> None:
+        self.client.collection(collection).document(doc_id).set(data)
+
     def update(self, collection: str, doc_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
         ref = self.client.collection(collection).document(doc_id)
         if not ref.get().exists:
@@ -51,14 +56,17 @@ class FirestoreRepo:
         ref.delete()
         return True
 
-    def add_many(self, collection: str, items: list[dict[str, Any]]) -> int:
+    def add_many(self, collection: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         # Firestore batch는 최대 500건
+        saved = []
         for i in range(0, len(items), 400):
             batch = self.client.batch()
             for item in items[i : i + 400]:
-                batch.set(self.client.collection(collection).document(), item)
+                ref = self.client.collection(collection).document()
+                batch.set(ref, item)
+                saved.append({"id": ref.id, **item})
             batch.commit()
-        return len(items)
+        return saved
 
     def delete_many(self, collection: str, doc_ids: list[str]) -> int:
         for i in range(0, len(doc_ids), 400):
@@ -90,6 +98,9 @@ class MemoryRepo:
         self._col(collection)[doc_id] = deepcopy(data)
         return {"id": doc_id, **data}
 
+    def set(self, collection: str, doc_id: str, data: dict[str, Any]) -> None:
+        self._col(collection)[doc_id] = deepcopy(data)
+
     def update(self, collection: str, doc_id: str, data: dict[str, Any]) -> dict[str, Any] | None:
         col = self._col(collection)
         if doc_id not in col:
@@ -100,10 +111,8 @@ class MemoryRepo:
     def delete(self, collection: str, doc_id: str) -> bool:
         return self._col(collection).pop(doc_id, None) is not None
 
-    def add_many(self, collection: str, items: list[dict[str, Any]]) -> int:
-        for item in items:
-            self.add(collection, item)
-        return len(items)
+    def add_many(self, collection: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [self.add(collection, item) for item in items]
 
     def delete_many(self, collection: str, doc_ids: list[str]) -> int:
         return sum(self.delete(collection, d) for d in doc_ids)

@@ -1,16 +1,22 @@
 """시계열 데이터 CRUD와 분석(요약/통계).
 
-데이터가 1만 건 이상이라 요청마다 Firestore 전체를 읽으면 무료 한도(일 5만 회 읽기)를 금방 넘는다.
-그래서 처음 한 번만 전체를 읽어 메모리에 캐시하고, 추가/수정/삭제 시 캐시도 함께 갱신한다.
+데이터가 1만 건 이상이라 Firestore 전체를 읽으면 무료 한도(일 5만 회 읽기)를 금방 넘는다.
+- 요청은 메모리 캐시에서 처리하고, 추가/수정/삭제 시 캐시도 함께 갱신한다.
+- 캐시를 채울 때는 통화별 스냅샷 문서(data_snapshots/{통화}) 5개만 읽는다.
+  스냅샷이 없을 때만 data 컬렉션 전체를 한 번 읽고 스냅샷을 만든다.
 (Render 무료 플랜은 인스턴스 1개라 캐시 불일치 문제가 없다.)
 """
+import json
+import logging
 import statistics as st
 import threading
 from datetime import date, datetime, timedelta, timezone
 
 from ..currencies import CURRENCIES
-from ..db import DATA_COLLECTION, repo
+from ..db import DATA_COLLECTION, SNAPSHOT_COLLECTION, repo
 from ..schemas import DataCreate, DataUpdate
+
+logger = logging.getLogger(__name__)
 
 TREND_WINDOW = 20  # 최근 추세 판단에 쓰는 데이터 개수
 TREND_THRESHOLD_PCT = 1.0  # 이 비율 이상 움직이면 증가/감소로 본다
@@ -21,17 +27,55 @@ def _now() -> str:
 
 
 _cache: dict[str, dict] | None = None
-_cache_lock = threading.Lock()
+_cache_lock = threading.RLock()
+
+
+def _load_snapshots() -> dict[str, dict] | None:
+    """통화별 스냅샷 5개를 읽는다. 하나라도 없거나 깨져 있으면 None."""
+    docs: dict[str, dict] = {}
+    for currency in CURRENCIES:
+        snap = repo.get(SNAPSHOT_COLLECTION, currency)
+        if snap is None:
+            return None
+        try:
+            items = json.loads(snap["payload"])
+        except (KeyError, TypeError, ValueError):
+            logger.warning("스냅샷 %s 이 손상되어 전체를 다시 읽습니다.", currency)
+            return None
+        docs.update({i["id"]: i for i in items})
+    return docs
+
+
+def _write_snapshot(currency: str) -> None:
+    items = sorted((i for i in _all().values() if i["currency"] == currency), key=lambda i: i["date"])
+    repo.set(
+        SNAPSHOT_COLLECTION,
+        currency,
+        {
+            # 배열 대신 문자열로 저장한다(배열 필드는 항목마다 색인돼 문서당 색인 한도를 넘는다).
+            "payload": json.dumps(items, ensure_ascii=False, separators=(",", ":")),
+            "count": len(items),
+            "updated_at": _now(),
+        },
+    )
 
 
 def _all() -> dict[str, dict]:
     global _cache
     with _cache_lock:
         if _cache is None:
-            docs = repo.list(DATA_COLLECTION)
-            for d in docs:
-                d.setdefault("currency", "USD")  # currency 필드 도입 이전 문서 호환
-            _cache = {d["id"]: d for d in docs}
+            docs = _load_snapshots()
+            if docs is not None:
+                _cache = docs
+                logger.info("스냅샷에서 데이터 %d건을 불러왔습니다(읽기 %d회).", len(docs), len(CURRENCIES))
+            else:
+                full = repo.list(DATA_COLLECTION)
+                for d in full:
+                    d.setdefault("currency", "USD")  # currency 필드 도입 이전 문서 호환
+                _cache = {d["id"]: d for d in full}
+                logger.info("data 컬렉션 전체 %d건을 읽어 스냅샷을 만듭니다.", len(full))
+                for currency in CURRENCIES:
+                    _write_snapshot(currency)
         return _cache
 
 
@@ -39,6 +83,30 @@ def reset_cache() -> None:
     global _cache
     with _cache_lock:
         _cache = None
+
+
+def add_many_data(rows: list[dict]) -> int:
+    """여러 건을 data 컬렉션에 추가하고 캐시와 해당 통화 스냅샷을 갱신한다(스크립트용)."""
+    if not rows:
+        return 0
+    with _cache_lock:
+        cache = _all()
+        for saved in repo.add_many(DATA_COLLECTION, rows):
+            cache[saved["id"]] = saved
+        for currency in {r["currency"] for r in rows}:
+            _write_snapshot(currency)
+    return len(rows)
+
+
+def rebuild_snapshots(docs: list[dict] | None = None) -> None:
+    """스냅샷을 새로 만든다. docs를 주면 그 목록으로, 없으면 data 컬렉션 전체를 다시 읽어서 만든다."""
+    global _cache
+    with _cache_lock:
+        if docs is None:
+            docs = repo.list(DATA_COLLECTION)
+        _cache = {d["id"]: {**d, "currency": d.get("currency", "USD")} for d in docs}
+        for currency in CURRENCIES:
+            _write_snapshot(currency)
 
 
 def list_data(currency: str | None = None, start: str | None = None, end: str | None = None) -> list[dict]:
@@ -57,8 +125,11 @@ def create_data(payload: DataCreate) -> dict:
     doc = {"date": payload.date.isoformat(), "currency": payload.currency, "value": payload.value,
            "memo": payload.memo,
            "created_at": now, "updated_at": now}
-    saved = repo.add(DATA_COLLECTION, doc)
-    _all()[saved["id"]] = saved
+    with _cache_lock:
+        cache = _all()
+        saved = repo.add(DATA_COLLECTION, doc)
+        cache[saved["id"]] = saved
+        _write_snapshot(saved["currency"])
     return saved
 
 
@@ -69,17 +140,27 @@ def update_data(doc_id: str, payload: DataUpdate) -> dict | None:
     if "memo" in changes:
         changes["memo"] = changes["memo"].strip()
     changes["updated_at"] = _now()
-    updated = repo.update(DATA_COLLECTION, doc_id, changes)
-    if updated is not None:
-        updated.setdefault("currency", "USD")
-        _all()[doc_id] = updated
+    with _cache_lock:
+        cache = _all()
+        updated = repo.update(DATA_COLLECTION, doc_id, changes)
+        if updated is not None:
+            updated.setdefault("currency", "USD")
+            before = cache.get(doc_id)
+            cache[doc_id] = updated
+            # 통화가 바뀌면 원래 통화의 스냅샷도 고친다
+            for currency in {updated["currency"], before["currency"] if before else updated["currency"]}:
+                _write_snapshot(currency)
     return updated
 
 
 def delete_data(doc_id: str) -> bool:
-    deleted = repo.delete(DATA_COLLECTION, doc_id)
-    if deleted:
-        _all().pop(doc_id, None)
+    with _cache_lock:
+        cache = _all()
+        deleted = repo.delete(DATA_COLLECTION, doc_id)
+        if deleted:
+            removed = cache.pop(doc_id, None)
+            if removed:
+                _write_snapshot(removed["currency"])
     return deleted
 
 
