@@ -1,4 +1,4 @@
-"""data/fx_krw.csv (5개 통화 × 10년, 12,800건)를 Firestore data 컬렉션에 넣는다.
+"""data/fx_krw.csv (5개 통화 × 10년, 약 1.3만 건)를 Firestore data 컬렉션에 넣는다.
 
 주의: Firestore 무료 한도는 하루 쓰기 2만 회다. 한 번 적재에 약 1.3만 회를 쓰므로
 --force 재적재(삭제 1.3만 + 쓰기 1.3만)는 하루 한도를 넘을 수 있다.

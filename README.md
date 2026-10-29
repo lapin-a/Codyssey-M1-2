@@ -5,7 +5,7 @@
 ## 서비스 소개
 
 환율이 궁금할 때 "요즘 달러가 오르고 있나?", "최근 1년 동안 가장 많이 떨어진 통화는?"을 여러 차트·표에서 직접 찾아 비교하기는 번거롭습니다.
-이 서비스는 5개 통화의 10년치 일별 환율(12,800개)을 Firestore에 저장해 두고, 질문할 때마다 **통화별 최신 데이터 요약(기간·개수·평균·최고/최저·1년 변화율·추세)을 GPT의 시스템 프롬프트에 주입**합니다.
+이 서비스는 5개 통화의 10년치 일별 환율(약 1만 3천 개)을 Firestore에 저장해 두고, 질문할 때마다 **통화별 최신 데이터 요약(기간·개수·평균·최고/최저·1년 변화율·추세)을 GPT의 시스템 프롬프트에 주입**합니다.
 그래서 GPT가 일반 지식이 아니라 **실제 저장된 수치**로 답합니다. 데이터를 추가·수정·삭제하면 다음 답변부터 바로 반영됩니다.
 
 | 기능 | 설명 |
@@ -39,7 +39,8 @@
 
 - **출처**: 유럽중앙은행(ECB) 기준 환율, [Frankfurter API](https://www.frankfurter.app/)
 - **통화**: USD(달러), EUR(유로), JPY(엔, **100엔당**), CNY(위안), GBP(파운드) — 모두 원화(KRW) 환산 값
-- **범위**: 2016-10-10 ~ 2026-10-09 영업일 기준 통화별 **2,560개 × 5 = 12,800개** (`backend/data/fx_krw.csv`)
+- **범위**: 2016-10-10 ~ 2026-10-28 영업일 기준 통화별 **2,573개 × 5 = 12,865개** (`backend/data/fx_krw.csv`, 2026-10-29 갱신)
+- **갱신**: `python -m scripts.update_rates`가 마지막 날짜 이후의 환율만 받아 빠진 날짜를 채웁니다(아래 "데이터 최신화" 참고)
 - **요약 정보** (`GET /api/data/summary?currency=USD`, 전체는 `/api/data/summary/all`)
   - 기간, 개수, 평균, 최고/최저(날짜 포함), 시작값/최신값, 기간 변화율, **최근 1년 변화율**
   - **최근 추세**: 최근 20개 값에 선형회귀 기울기를 구해 구간 동안의 예상 변화율이 +1% 이상이면 `증가`, -1% 이하면 `감소`, 그 사이면 `유지`
@@ -64,7 +65,9 @@ Codyssey-M1-2/
 │   │       ├── data_service.py
 │   │       ├── conversation_service.py
 │   │       └── chat_service.py
-│   ├── scripts/seed.py          # CSV → Firestore 초기 적재
+│   ├── scripts/
+│   │   ├── seed.py              # CSV → Firestore 초기 적재
+│   │   └── update_rates.py      # 최신 환율로 빠진 날짜 채우기(CSV/Firestore)
 │   ├── data/fx_krw.csv          # 5개 통화 × 10년
 │   ├── requirements.txt
 │   └── .env.example
@@ -179,7 +182,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env        # 값 채우기 (아래 환경 변수 참고)
 
-python -m scripts.seed      # 최초 1회: CSV 12,800개를 Firestore에 적재
+python -m scripts.seed      # 최초 1회: CSV 전체(12,865개)를 Firestore에 적재
 uvicorn main:app --reload   # http://localhost:8000/docs
 ```
 
@@ -194,6 +197,18 @@ python -m http.server 5500 -d public   # http://localhost:5500
 ```
 
 다른 API 주소를 쓰려면 `API_BASE_URL=https://... node build.js`로 빌드합니다.
+
+### 3) 데이터 최신화
+
+CSV와 Firestore는 자동으로 갱신되지 않습니다. 아래 스크립트가 통화별 마지막 날짜 다음 날부터 오늘까지의 환율을 Frankfurter에서 받아 **빠진 (날짜, 통화)만** 추가합니다. 이미 최신이면 아무것도 하지 않습니다.
+
+```bash
+cd backend
+python -m scripts.update_rates              # data/fx_krw.csv 갱신 (기본)
+python -m scripts.update_rates --firestore  # Firestore에 빠진 날짜만 추가 (자격 증명 필요)
+```
+
+> `--firestore`는 중복 확인을 위해 data 컬렉션 전체를 한 번 읽습니다(읽기 약 1.3만 회). 실행 후 백엔드 서버를 재시작해야 메모리 캐시에 반영됩니다.
 
 ## 환경 변수
 
@@ -223,7 +238,7 @@ python -m http.server 5500 -d public   # http://localhost:5500
 - **OpenAI 키는 백엔드에만**: 프론트엔드 JS는 누구나 볼 수 있으므로 키를 두면 바로 유출됩니다. 프론트는 백엔드 주소(`API_BASE_URL`)만 압니다.
 - **CORS**: 브라우저는 다른 도메인(Vercel → Render)으로의 요청을 기본적으로 막습니다. `ALLOWED_ORIGINS`에 등록한 내 프론트 도메인만 허용해, 다른 사이트가 내 API를 브라우저에서 호출해 OpenAI 비용을 쓰는 것을 줄입니다.
 - **비용 제한**: `max_completion_tokens`, 이전 대화 최대 10개, 도구 호출 최대 3회, 메시지 2000자 제한을 둡니다.
-- **Firestore 읽기 한도**: 무료 플랜은 하루 읽기 5만 회입니다. 12,800건을 요청마다 읽으면 질문 4번이면 한도를 넘기 때문에, 서버가 처음 한 번만 전체를 읽어 **메모리에 캐시**하고 추가/수정/삭제 때 캐시를 함께 갱신합니다. 초기 적재(`seed`)도 쓰기 약 1.3만 회라 하루 2만 회 한도 안에서 한 번만 실행하세요.
+- **Firestore 읽기 한도**: 무료 플랜은 하루 읽기 5만 회입니다. 1만 2천여 건을 요청마다 읽으면 질문 4번이면 한도를 넘기 때문에, 서버가 처음 한 번만 전체를 읽어 **메모리에 캐시**하고 추가/수정/삭제 때 캐시를 함께 갱신합니다. 초기 적재(`seed`)도 쓰기 약 1.3만 회라 하루 2만 회 한도 안에서 한 번만 실행하세요.
 
 ## 배포
 
