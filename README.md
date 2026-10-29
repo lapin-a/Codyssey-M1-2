@@ -306,9 +306,6 @@ python -m scripts.update_rates --firestore  # Firestore에 빠진 날짜만 추�
 ```
 
 `--firestore`는 스냅샷 5건만 읽고 새 데이터만 씁니다. 이미 실행 중인 서버(Render)는 메모리 캐시를 쓰므로, 반영하려면 재시작(Manual Deploy)이 필요합니다. 스냅샷이 원본과 어긋났다고 의심되면 `python -m scripts.seed --snapshots`로 다시 만들 수 있습니다(전체 읽기 1회).
-
-> `--firestore`는 중복 확인을 위해 data 컬렉션 전체를 한 번 읽습니다(읽기 약 1.3만 회). 실행 후 백엔드 서버를 재시작해야 메모리 캐시에 반영됩니다.
-
 ## 환경 변수
 
 ### 백엔드 (Render)

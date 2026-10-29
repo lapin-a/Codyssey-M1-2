@@ -32,6 +32,13 @@ app.include_router(chat.router)
 
 @app.exception_handler(Exception)
 async def unhandled_error(request: Request, exc: Exception):
+    # Firestore 무료 한도 초과(429)는 서버 버그가 아니므로 원인과 복구 시점을 알려준다.
+    if type(exc).__name__ == "ResourceExhausted":
+        logger.error("Firestore 사용량 한도 초과: %s %s", request.method, request.url.path)
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "데이터베이스 일일 무료 사용량을 초과했습니다. 매일 오후 4~5시(KST)에 초기화되니 그 이후 다시 시도해 주세요."},
+        )
     logger.exception("처리되지 않은 오류: %s %s", request.method, request.url.path)
     return JSONResponse(status_code=500, content={"detail": "서버 내부 오류가 발생했습니다."})
 

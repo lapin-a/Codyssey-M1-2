@@ -74,8 +74,12 @@ def _all() -> dict[str, dict]:
                     d.setdefault("currency", "USD")  # currency 필드 도입 이전 문서 호환
                 _cache = {d["id"]: d for d in full}
                 logger.info("data 컬렉션 전체 %d건을 읽어 스냅샷을 만듭니다.", len(full))
-                for currency in CURRENCIES:
-                    _write_snapshot(currency)
+                # 스냅샷 쓰기가 실패해도 이미 읽은 캐시로 요청은 처리한다(다음 시작 때 다시 시도).
+                try:
+                    for currency in CURRENCIES:
+                        _write_snapshot(currency)
+                except Exception:
+                    logger.exception("스냅샷 저장에 실패했습니다. 다음 서버 시작 때 전체를 다시 읽습니다.")
         return _cache
 
 
