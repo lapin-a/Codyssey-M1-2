@@ -133,11 +133,21 @@ function clearMessages() {
   $("#chatEmpty").classList.remove("hidden");
 }
 
+// AI 답변의 **굵게**, `코드`만 표시한다. HTML은 먼저 이스케이프해서 스크립트 삽입을 막는다.
+function renderLite(text) {
+  const escaped = text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  return escaped
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/^#{1,6}\s+/gm, "");
+}
+
 function addMessage(role, content) {
   $("#chatEmpty").classList.add("hidden");
   const el = document.createElement("div");
   el.className = `msg ${role}`;
-  el.textContent = content;
+  if (role === "assistant") el.innerHTML = renderLite(content);
+  else el.textContent = content;
   $("#messages").appendChild(el);
   el.scrollIntoView({ block: "end" });
   return el;
