@@ -14,7 +14,7 @@
 | 데이터 관리(CRUD) | (date, currency, value, memo) 추가/수정/삭제, 목록 갱신, 저장 결과 토스트 |
 | 대화 기록 | 채팅 시 자동 저장, 목록 조회, 클릭 시 불러오기, 삭제 |
 | 데이터 요약 | 통화 선택 + 상단 요약 바(기간/개수/평균/최고·최저/최신값·1년 변화/추세) |
-| 보너스 | 상세 통계 API(연도별·월별 포함), 추이 그래프(1년/3년/5년/전체 + 이동평균), CSV/JSON 내보내기, 다크 모드 |
+| 보너스 | Function Calling + **MCP 서버**(외부 AI 클라이언트 연동), 상세 통계 API(연도별·월별 포함), 추이 그래프(1년/3년/5년/전체 + 이동평균), CSV/JSON 내보내기, 다크 모드 |
 
 ## 배포 URL
 
@@ -75,6 +75,11 @@ Codyssey-M1-2/
 │   ├── public/                  # index.html, style.css, app.js (+ 빌드 시 생성되는 config.js)
 │   ├── build.js                 # API_BASE_URL 환경 변수 → public/config.js
 │   └── vercel.json
+├── mcp_server/                  # 보너스: 같은 기능을 MCP 도구로 노출
+│   ├── server.py                # FastMCP 서버(stdio), 도구 6개 → 백엔드 HTTP 호출
+│   ├── test_client.py           # stdio로 띄워 도구 목록·호출을 확인하는 클라이언트
+│   └── requirements.txt         # mcp(1.x), httpx — 백엔드 배포에는 포함하지 않음
+├── .mcp.json.example            # Claude Code 프로젝트 MCP 설정 예시
 ├── render.yaml                  # Render 배포 설정(Blueprint)
 └── docs/screenshots/
 ```
@@ -166,6 +171,92 @@ GPT 호출 (tools 4개 제공)
 | --- | --- | --- |
 | 최근 1년 동안 가장 많이 떨어진 통화는? | 없음 | (주입된 5개 통화 요약의 "최근 1년 변화율"로 충분 → EUR -8.77%) |
 | 2020년 유로 환율 변동성을 알려줘 | `get_statistics(EUR, 2020-01-01, 2020-12-31)` | "2020년 유로 환율의 변동성(표준편차·일간 변동성·최대 낙폭 등)을 확인하려고" |
+
+## MCP 연동 (보너스)
+
+[MCP(Model Context Protocol)](https://modelcontextprotocol.io)는 AI 클라이언트(Claude Desktop, Claude Code, Cursor 등)에 외부 도구를 연결하는 표준 규격입니다.
+웹 채팅의 GPT가 Function Calling으로 쓰는 기능을 **MCP 서버(`mcp_server/server.py`)로도 노출**해, 다른 AI 클라이언트에서도 같은 데이터를 조회할 수 있게 했습니다.
+
+### 호출 흐름
+
+```
+[채널 1] 웹 채팅
+브라우저 ──▶ POST /api/chat ──▶ GPT(gpt-5.5) ──tool_call──▶ data_service ──▶ Firestore
+
+[채널 2] MCP
+Claude 등 MCP 클라이언트 ──stdio(JSON-RPC)──▶ mcp_server/server.py ──HTTP GET──▶ FastAPI /api/... ──▶ Firestore
+```
+
+1. 클라이언트가 `server.py`를 하위 프로세스로 띄우고 stdio로 연결합니다(`initialize` → `tools/list`).
+2. 사용자의 질문에 따라 **클라이언트 쪽 모델이** 도구 설명(docstring)과 입력 스키마를 보고 호출할 도구와 인자를 고릅니다(`tools/call`).
+3. MCP 서버는 인자를 검증(통화는 `USD`/`EUR`/`JPY`/`CNY`/`GBP`만)하고 백엔드 API를 호출해 JSON을 돌려줍니다.
+4. 백엔드 오류(404, 422)나 연결 실패·시간 초과는 읽을 수 있는 오류 메시지(`isError`)로 바꿔 전달합니다.
+
+MCP 서버는 DB에 직접 접근하지 않고 **백엔드 API만 호출**합니다. 그래서 웹 서비스와 같은 데이터·검증 규칙을 쓰고, 키(Firebase/OpenAI)도 필요 없습니다. 조회 전용이라 데이터를 바꾸는 도구는 넣지 않았습니다.
+
+### 도구 목록
+
+| 도구 | 호출하는 API | 용도 |
+| --- | --- | --- |
+| `get_summary(currency)` | `GET /api/data/summary` | 한 통화의 요약(기간, 평균, 최고/최저, 1년 변화율, 추세) |
+| `get_all_summaries()` | `GET /api/data/summary/all` | 5개 통화 요약을 한 번에 — 통화 비교 질문용 |
+| `get_statistics(currency, start_date?, end_date?)` | `GET /api/data/statistics` | 변동성, MDD, 이동평균, 연도별·월별 통계(월별은 최근 24개월) |
+| `list_data(currency, start_date?, end_date?, limit≤60)` | `GET /api/data` | 특정 기간의 일별 원본 값 |
+| `list_conversations()` | `GET /api/conversations` | 웹 채팅에 저장된 대화 목록 |
+| `get_conversation(conversation_id)` | `GET /api/conversations/{id}` | 대화 하나의 전체 메시지 |
+
+### 설치와 실행
+
+```bash
+# 저장소 루트에서
+python -m venv mcp_server/.venv
+mcp_server/.venv/Scripts/pip install -r mcp_server/requirements.txt   # macOS/Linux: mcp_server/.venv/bin/pip
+
+# 백엔드를 켠 상태에서 동작 확인 (도구 목록 + 실제 호출)
+mcp_server/.venv/Scripts/python mcp_server/test_client.py
+```
+
+백엔드 주소는 환경 변수 `API_BASE_URL`(기본 `http://localhost:8000`)로 바꿉니다. 배포 후에는 Render 주소를 넣으면 됩니다.
+
+### 클라이언트에 연결하기
+
+**Claude Code** — 둘 중 하나:
+
+```bash
+# 명령으로 추가 (저장소 루트에서, Windows 경로 예시)
+claude mcp add fx-ai-chat --env API_BASE_URL=http://localhost:8000 -- mcp_server/.venv/Scripts/python mcp_server/server.py
+```
+
+또는 `.mcp.json.example`을 `.mcp.json`으로 복사하면 이 저장소를 연 Claude Code가 프로젝트 MCP 서버로 인식합니다(처음 한 번 사용 승인).
+
+**Claude Desktop** — `claude_desktop_config.json`의 `mcpServers`에 추가(경로는 절대 경로로):
+
+```json
+{
+  "mcpServers": {
+    "fx-ai-chat": {
+      "command": "C:/path/to/Codyssey-M1-2/mcp_server/.venv/Scripts/python.exe",
+      "args": ["C:/path/to/Codyssey-M1-2/mcp_server/server.py"],
+      "env": { "API_BASE_URL": "https://<your-api>.onrender.com", "PYTHONIOENCODING": "utf-8" }
+    }
+  }
+}
+```
+
+### 실제 호출 결과 (`test_client.py`, 로컬 백엔드, 2026-10-29)
+
+| 호출 | 결과 요약 |
+| --- | --- |
+| `tools/list` | 도구 6개 확인 (위 표와 동일) |
+| `get_all_summaries()` | 5개 통화 요약. 예: USD 2,573개, 2016-10-10 ~ 2026-10-28, 최신 1,340.47원, 1년 -6.68%, 추세 감소 |
+| `get_summary(JPY)` | 100엔당 최신 848.6원, 10년 최고 1,173.76원(2020-03-09), 최저 839.62원(2026-10-21), 1년 -10.03% |
+| `get_statistics(EUR, 2020-01-01, 2020-12-31)` | 257개, 표준편차 33.8원, 일간 변동성 0.551%, MDD -7.72%, 연평균 1,345.58원 |
+| `list_data(USD, start_date=2026-10-20, limit=5)` | 10-22 1,324.63원 … 10-28 1,340.47원 (주말 제외 5개) |
+| `list_conversations()` → `get_conversation(id)` | 웹 채팅에 저장된 "엔화 최근 추세" 대화와 메시지 2개 조회 |
+| `get_summary(KRW)` | 오류: 통화는 `USD`/`EUR`/`JPY`/`CNY`/`GBP`만 허용 (입력 검증) |
+| `get_conversation("../data/summary")` | 오류: 404 — id를 URL 인코딩해 다른 API 경로로 새지 않음 |
+
+웹 채팅(GPT)은 "어떤 도구를 왜 불렀는지"를 `reason` 인자로 남기지만, MCP에서는 도구를 고르는 주체가 클라이언트 쪽 모델이라 근거는 클라이언트 화면(도구 호출 표시)에서 확인합니다.
 
 ## 로컬 실행 방법
 

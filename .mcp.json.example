@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "fx-ai-chat": {
+      "type": "stdio",
+      "command": "mcp_server/.venv/Scripts/python",
+      "args": ["mcp_server/server.py"],
+      "env": {
+        "API_BASE_URL": "http://localhost:8000",
+        "PYTHONIOENCODING": "utf-8"
+      }
+    }
+  }
+}
